@@ -194,6 +194,8 @@ See all models: https://openrouter.ai/models
 
 The repo now includes a container-friendly OpenRouter path. State is persisted via the `ai_home` volume mount, and the API key is injected as an environment variable instead of being copied between dotfiles.
 
+The Docker image pins `mini-swe-agent==1.17.1` because the agent configs in this repo are built around the v1 command/code-block interaction model. `mini-swe-agent` v2 expects native tool calls and will reject these prompts without a full config migration.
+
 ```bash
 just init
 # edit .env and set OPENROUTER_API_KEY
@@ -214,13 +216,22 @@ Important envs in `.env`:
 - `OPENROUTER_API_KEY`
 - `OPENROUTER_MODEL`
 - `OPENROUTER_BASE_URL`
+- `MSWEA_COST_TRACKING`
 - `SESSION_INTERVAL_MINUTES`
 - `SESSION_TIMEOUT_SECONDS`
+- `SESSION_RETRY_SECONDS`
+
+If OpenRouter returns a transient `429` during the preflight validation check, the container now treats that as a rate-limit event rather than a bad API key. It skips that wake cycle and retries after `SESSION_RETRY_SECONDS`.
+
+For `mini-swe-agent` v2, the container also writes the global config file that `mini` expects at startup and sets `MSWEA_CONFIGURED=true`, `MSWEA_MODEL_NAME=openai/<model>`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` automatically.
 
 Useful helper commands:
 
 ```bash
 just status
+just pause
+just resume
+just wake-now
 just reset
 just run-once
 just logs

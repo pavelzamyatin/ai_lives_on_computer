@@ -12,7 +12,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bash coreutils curl ca-certificates procps \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install mini-swe-agent
+RUN pip install mini-swe-agent==1.17.1
 
 WORKDIR /app
 

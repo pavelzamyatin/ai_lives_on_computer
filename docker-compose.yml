@@ -4,16 +4,18 @@ services:
       context: .
     environment:
       APP_HOME: /app
-      AI_HOME: /data/ai_home
+      AI_HOME: /root/ai_home
       AGENT_ROOT_DIR: /app
       AGENT_CONFIG_DIR: /app/config
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct:free}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      MSWEA_CONFIGURED: "true"
+      MSWEA_COST_TRACKING: ${MSWEA_COST_TRACKING:-ignore_errors}
       SESSION_INTERVAL_MINUTES: ${SESSION_INTERVAL_MINUTES:-15}
       SESSION_TIMEOUT_SECONDS: ${SESSION_TIMEOUT_SECONDS:-1800}
+      SESSION_RETRY_SECONDS: ${SESSION_RETRY_SECONDS:-60}
     command: ["loop"]
     volumes:
-      - ./ai_home:/data/ai_home
-      - ./workspace:/workspace
+      - ./runtime/ai_home:/root/ai_home
     restart: unless-stopped

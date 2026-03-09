@@ -58,6 +58,7 @@ fi
 
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 SESSION_COUNTER_FILE="$STATE_DIR/session_counter.txt"
+HISTORY_FILE="$LOG_DIR/history.md"
 
 #############################################
 # LOCK MANAGEMENT FUNCTIONS
@@ -248,14 +249,18 @@ check_openrouter_token_validity() {
         -d "{\"model\": \"$model\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"max_tokens\": 1}" 2>/dev/null)
     
     local http_code=$(echo "$response" | tail -1)
-    
+    local body=$(echo "$response" | head -n -1)
+
     if [ "$http_code" = "200" ]; then
         rm -f "$TOKEN_ERROR_FILE"
         echo "[$TIMESTAMP] OpenRouter token valid (model: $model)" >> "$LOG_DIR/runner.log"
         return 0
+    elif [ "$http_code" = "429" ]; then
+        echo "[$TIMESTAMP] OPENROUTER RATE LIMIT: Provider returned HTTP 429 during validation" >> "$LOG_DIR/runner.log"
+        echo "[$TIMESTAMP] Response: $body" >> "$LOG_DIR/runner.log"
+        return 2
     else
         echo "[$TIMESTAMP] OPENROUTER TOKEN ERROR: API returned HTTP $http_code" >> "$LOG_DIR/runner.log"
-        local body=$(echo "$response" | head -n -1)
         echo "[$TIMESTAMP] Response: $body" >> "$LOG_DIR/runner.log"
         return 1
     fi
@@ -332,9 +337,17 @@ METHOD="${1:-live-swe-agent}"
 
 # IMPORTANT: Check token validity BEFORE checking repetition
 # This prevents circuit breaker spam when the real issue is an expired token
-if [ "$METHOD" = "openrouter" ] && ! check_token_validity "$METHOD"; then
-    echo "[$TIMESTAMP] OpenRouter token invalid. Check OPENROUTER_API_KEY / OPENROUTER_BASE_URL." >> "$LOG_DIR/runner.log"
-    exit 1
+if [ "$METHOD" = "openrouter" ]; then
+    check_token_validity "$METHOD"
+    token_check_status=$?
+
+    if [ "$token_check_status" -eq 1 ]; then
+        echo "[$TIMESTAMP] OpenRouter token invalid. Check OPENROUTER_API_KEY / OPENROUTER_BASE_URL." >> "$LOG_DIR/runner.log"
+        exit 1
+    elif [ "$token_check_status" -eq 2 ]; then
+        echo "[$TIMESTAMP] OpenRouter validation hit a transient rate limit. Skipping this wake cycle." >> "$LOG_DIR/runner.log"
+        exit 0
+    fi
 elif false && ! check_token_validity "$METHOD"; then  # DISABLED - qwen-cli handles auth
     if [ "$METHOD" = "openrouter" ]; then
         echo "[$TIMESTAMP] OpenRouter token invalid. Please check ~/.config/mini-swe-agent/.env.openrouter" >> "$LOG_DIR/runner.log"
@@ -383,6 +396,35 @@ build_prompt() {
     fi
     echo "=== BEGIN ==="
     echo "You are now awake. This is session #$NEXT_SESSION."
+}
+
+get_file_fingerprint() {
+    local path="$1"
+
+    if [ ! -f "$path" ]; then
+        echo "missing"
+        return
+    fi
+
+    wc -c < "$path" 2>/dev/null | tr -d '[:space:]'
+}
+
+record_session_fallbacks() {
+    local history_before="$1"
+    local history_after
+    local final_counter
+
+    history_after=$(get_file_fingerprint "$HISTORY_FILE")
+    if [ "$history_before" = "$history_after" ]; then
+        printf '[%s] Session #%s finished via %s; wrapper recorded fallback history entry.\n' \
+            "$TIMESTAMP" "$NEXT_SESSION" "$METHOD" >> "$HISTORY_FILE"
+    fi
+
+    final_counter=$(cat "$SESSION_COUNTER_FILE" 2>/dev/null || echo "")
+    if [ "$final_counter" != "$NEXT_SESSION" ]; then
+        echo "$NEXT_SESSION" > "$SESSION_COUNTER_FILE"
+        echo "[$TIMESTAMP] WARNING: Session counter was not updated by the agent. Forced to $NEXT_SESSION." >> "$LOG_DIR/runner.log"
+    fi
 }
 
 #############################################
@@ -452,6 +494,8 @@ run_with_openrouter() {
     export OPENAI_API_KEY="$OPENROUTER_API_KEY"
     export OPENAI_BASE_URL="$OPENROUTER_BASE_URL"
     export MSWEA_MODEL_NAME="openai/${model}"
+    export MSWEA_CONFIGURED="true"
+    export MSWEA_COST_TRACKING="${MSWEA_COST_TRACKING:-ignore_errors}"
     
     echo "[$TIMESTAMP] Using OpenRouter model: $model" >> "$LOG_DIR/runner.log"
     
@@ -508,6 +552,7 @@ run_with_direct_api() {
 #############################################
 
 # METHOD already set above for token validation
+HISTORY_BEFORE=$(get_file_fingerprint "$HISTORY_FILE")
 
 echo "[$TIMESTAMP] Running with method: $METHOD (timeout: ${SESSION_TIMEOUT_SECONDS}s)" >> "$LOG_DIR/runner.log"
 
@@ -530,5 +575,7 @@ case "$METHOD" in
         exit 1
         ;;
 esac
+
+record_session_fallbacks "$HISTORY_BEFORE"
 
 echo "[$TIMESTAMP] Session #$NEXT_SESSION complete" >> "$LOG_DIR/runner.log"

@@ -1,5 +1,5 @@
 .git
 .DS_Store
-ai_home/logs
+ai_home/logs/runner.log
+ai_home/logs/session_*.log
 ai_home/state/session.lock
-workspace
