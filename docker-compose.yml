@@ -1,0 +1,19 @@
+services:
+  ai-agent:
+    build:
+      context: .
+    environment:
+      APP_HOME: /app
+      AI_HOME: /data/ai_home
+      AGENT_ROOT_DIR: /app
+      AGENT_CONFIG_DIR: /app/config
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct:free}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      SESSION_INTERVAL_MINUTES: ${SESSION_INTERVAL_MINUTES:-15}
+      SESSION_TIMEOUT_SECONDS: ${SESSION_TIMEOUT_SECONDS:-1800}
+    command: ["loop"]
+    volumes:
+      - ./ai_home:/data/ai_home
+      - ./workspace:/workspace
+    restart: unless-stopped

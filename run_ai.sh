@@ -18,11 +18,18 @@ set -e
 # CONFIGURATION
 #############################################
 
-AI_HOME="$HOME/ai_home"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+AI_HOME="${AI_HOME:-$HOME/ai_home}"
 SYSTEM_PROMPT_FILE="$AI_HOME/SYSTEM_PROMPT.md"
 LOG_DIR="$AI_HOME/logs"
 STATE_DIR="$AI_HOME/state"
 CONFIG_FILE="$AI_HOME/config.sh"
+AGENT_ROOT_DIR="${AGENT_ROOT_DIR:-${LIVE_SWE_AGENT_DIR:-$SCRIPT_DIR}}"
+AGENT_CONFIG_DIR="${AGENT_CONFIG_DIR:-$AGENT_ROOT_DIR/config}"
+OPENROUTER_BASE_URL="${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}"
+OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
+MSWEA_ENV_FILE="${MSWEA_ENV_FILE:-$HOME/.config/mini-swe-agent/.env}"
 
 # Lock file location
 LOCK_FILE="$STATE_DIR/session.lock"
@@ -220,22 +227,20 @@ check_token_validity() {
 
 check_openrouter_token_validity() {
     # Check OpenRouter API key validity
-    local env_file="$HOME/.config/mini-swe-agent/.env.openrouter"
-    
-    local token=""
-    if [ -f "$env_file" ]; then
-        token=$(grep "^OPENAI_API_KEY=" "$env_file" | cut -d= -f2)
+    local token="$OPENROUTER_API_KEY"
+
+    if [ -z "$token" ] && [ -f "$MSWEA_ENV_FILE" ]; then
+        token=$(grep "^OPENAI_API_KEY=" "$MSWEA_ENV_FILE" | cut -d= -f2)
     fi
-    
+
     if [ -z "$token" ]; then
-        echo "[$TIMESTAMP] OPENROUTER TOKEN ERROR: No API key found in $env_file" >> "$LOG_DIR/runner.log"
-        echo "[$TIMESTAMP] Please create $env_file with your OpenRouter API key" >> "$LOG_DIR/runner.log"
+        echo "[$TIMESTAMP] OPENROUTER TOKEN ERROR: No API key found in OPENROUTER_API_KEY or $MSWEA_ENV_FILE" >> "$LOG_DIR/runner.log"
         return 1
     fi
-    
+
     # Test token with minimal API call to OpenRouter
     local model="${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct}"
-    local response=$(curl -s -w "\n%{http_code}" -m 15 -X POST "https://openrouter.ai/api/v1/chat/completions" \
+    local response=$(curl -s -w "\n%{http_code}" -m 15 -X POST "${OPENROUTER_BASE_URL}/chat/completions" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" \
         -H "HTTP-Referer: https://github.com/ai-lives-on-computer" \
@@ -327,7 +332,10 @@ METHOD="${1:-live-swe-agent}"
 
 # IMPORTANT: Check token validity BEFORE checking repetition
 # This prevents circuit breaker spam when the real issue is an expired token
-if false && ! check_token_validity "$METHOD"; then  # DISABLED - qwen-cli handles auth
+if [ "$METHOD" = "openrouter" ] && ! check_token_validity "$METHOD"; then
+    echo "[$TIMESTAMP] OpenRouter token invalid. Check OPENROUTER_API_KEY / OPENROUTER_BASE_URL." >> "$LOG_DIR/runner.log"
+    exit 1
+elif false && ! check_token_validity "$METHOD"; then  # DISABLED - qwen-cli handles auth
     if [ "$METHOD" = "openrouter" ]; then
         echo "[$TIMESTAMP] OpenRouter token invalid. Please check ~/.config/mini-swe-agent/.env.openrouter" >> "$LOG_DIR/runner.log"
         exit 1
@@ -382,8 +390,11 @@ build_prompt() {
 #############################################
 
 run_with_live_swe_agent() {
-    cd ~/live-swe-agent
-    source venv/bin/activate
+    cd "$AGENT_ROOT_DIR"
+
+    if [ -f "venv/bin/activate" ]; then
+        source venv/bin/activate
+    fi
     
     # Sync fresh token from oauth_creds.json to .env before each session
     local token_file="$HOME/.qwen/oauth_creds.json"
@@ -399,7 +410,7 @@ run_with_live_swe_agent() {
     PROMPT=$(build_prompt)
     
     # Use custom config with step limit
-    timeout "${SESSION_TIMEOUT_SECONDS}s" mini --config config/ai_agent.yaml \
+    timeout "${SESSION_TIMEOUT_SECONDS}s" mini --config "$AGENT_CONFIG_DIR/ai_agent.yaml" \
          --model openai/coder-model \
          --task "$PROMPT" \
          --yolo \
@@ -417,45 +428,35 @@ run_with_live_swe_agent() {
 run_with_openrouter() {
     # OpenRouter method - supports many models via unified API
     # Model can be configured in config.sh via OPENROUTER_MODEL variable
-    
-    cd ~/live-swe-agent
-    source venv/bin/activate
-    
-    # mini-swe-agent always reads from ~/.config/mini-swe-agent/.env
-    # We need to temporarily swap it with the OpenRouter config
-    local main_env="$HOME/.config/mini-swe-agent/.env"
-    local openrouter_env="$HOME/.config/mini-swe-agent/.env.openrouter"
-    local backup_env="$HOME/.config/mini-swe-agent/.env.qwen.backup"
-    
-    if [ ! -f "$openrouter_env" ]; then
-        echo "[$TIMESTAMP] ERROR: OpenRouter config not found at $openrouter_env" >> "$LOG_DIR/runner.log"
-        echo "[$TIMESTAMP] Run ~/setup-openrouter.sh to configure OpenRouter" >> "$LOG_DIR/runner.log"
-        return 1
+
+    cd "$AGENT_ROOT_DIR"
+
+    if [ -f "venv/bin/activate" ]; then
+        source venv/bin/activate
     fi
-    
-    # Backup the current .env (Qwen config) and swap in OpenRouter config
-    if [ -f "$main_env" ]; then
-        cp "$main_env" "$backup_env"
-    fi
-    cp "$openrouter_env" "$main_env"
-    
-    # Ensure cleanup happens even if the command fails
-    cleanup_env() {
-        if [ -f "$backup_env" ]; then
-            cp "$backup_env" "$main_env"
-        fi
-    }
-    trap cleanup_env RETURN
-    
+
     PROMPT=$(build_prompt)
     
     # Get model from config, default to a capable free/cheap model
     local model="${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct}"
+
+    if [ -z "$OPENROUTER_API_KEY" ] && [ -f "$MSWEA_ENV_FILE" ]; then
+        OPENROUTER_API_KEY=$(grep "^OPENAI_API_KEY=" "$MSWEA_ENV_FILE" | cut -d= -f2)
+    fi
+
+    if [ -z "$OPENROUTER_API_KEY" ]; then
+        echo "[$TIMESTAMP] ERROR: OPENROUTER_API_KEY is not set" >> "$LOG_DIR/runner.log"
+        return 1
+    fi
+
+    export OPENAI_API_KEY="$OPENROUTER_API_KEY"
+    export OPENAI_BASE_URL="$OPENROUTER_BASE_URL"
+    export MSWEA_MODEL_NAME="openai/${model}"
     
     echo "[$TIMESTAMP] Using OpenRouter model: $model" >> "$LOG_DIR/runner.log"
     
     # Use custom config with step limit - OpenRouter uses openai/ prefix
-    timeout "${SESSION_TIMEOUT_SECONDS}s" mini --config config/ai_agent_openrouter.yaml \
+    timeout "${SESSION_TIMEOUT_SECONDS}s" mini --config "$AGENT_CONFIG_DIR/ai_agent_openrouter.yaml" \
          --model "openai/${model}" \
          --task "$PROMPT" \
          --yolo \

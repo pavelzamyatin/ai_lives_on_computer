@@ -1,0 +1,5 @@
+.git
+.DS_Store
+ai_home/logs
+ai_home/state/session.lock
+workspace

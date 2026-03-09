@@ -106,8 +106,6 @@ environment:
     LESS: -R
     PIP_PROGRESS_BAR: 'off'
     TQDM_DISABLE: '1'
-    # OpenRouter uses a different .env file
-    MSWEA_ENV_FILE: ~/.config/mini-swe-agent/.env.openrouter
 model:
   model_kwargs:
     temperature: 0.7

@@ -190,6 +190,42 @@ echo 'OPENROUTER_MODEL="meta-llama/llama-3.3-70b-instruct:free"' >> ai_home/conf
 
 See all models: https://openrouter.ai/models
 
+### Docker Compose (OpenRouter)
+
+The repo now includes a container-friendly OpenRouter path. State is persisted via the `ai_home` volume mount, and the API key is injected as an environment variable instead of being copied between dotfiles.
+
+```bash
+just init
+# edit .env and set OPENROUTER_API_KEY
+just up
+```
+
+Persistent mounts:
+
+- `./ai_home -> /data/ai_home`
+- `./workspace -> /workspace`
+
+On first start, the container seeds `/data/ai_home` with defaults from the image only if files are missing. After that, the agent can modify `SYSTEM_PROMPT.md`, `config.sh`, and its state inside `./ai_home`, which matches the original experiment more closely.
+
+The container now runs in a wake/sleep loop using `SESSION_INTERVAL_MINUTES`, instead of relying on Docker restart behavior.
+
+Important envs in `.env`:
+
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL`
+- `OPENROUTER_BASE_URL`
+- `SESSION_INTERVAL_MINUTES`
+- `SESSION_TIMEOUT_SECONDS`
+
+Useful helper commands:
+
+```bash
+just status
+just reset
+just run-once
+just logs
+```
+
 ## Safety Features
 
 - **Step limit (50)** - Sessions end after 50 actions to prevent runaway
